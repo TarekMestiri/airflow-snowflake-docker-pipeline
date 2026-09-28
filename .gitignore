@@ -1,0 +1,13 @@
+﻿# Ignore private environment configurations and secrets
+.env
+*.env
+
+# Ignore Airflow operational logs and database caches
+logs/
+__pycache__/
+dags/__pycache__/
+*.pyc
+
+# Ignore local system files
+.DS_Store
+Thumbs.db
