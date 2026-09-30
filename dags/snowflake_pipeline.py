@@ -1,38 +1,63 @@
-﻿from datetime import datetime, timedelta
+﻿import random
+from datetime import datetime
 from airflow import DAG
-from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
+from airflow.providers.common.sql.operators.sql import (
+    SQLExecuteQueryOperator, SQLCheckOperator,
+)
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
-default_args = {
-    'owner': 'airflow',
-    'depends_on_past': False,
-    'start_date': datetime(2026, 9, 25),
-    'retries': 0,
-}
+def load_random_rows():
+    products = {"Laptop": 1200, "Mouse": 25, "Monitor": 350, "Keyboard": 80}
+    rows = []
+    for _ in range(5):
+        name = random.choice(list(products))
+        rows.append((random.randint(1000, 9999), name, products[name]))
+    SnowflakeHook(snowflake_conn_id="snowflake_conn").insert_rows(
+        table="AIRFLOW_DB.PUBLIC.SALES_DATA",
+        rows=rows,
+        target_fields=["ORDER_ID", "PRODUCT_NAME", "AMOUNT"],
+    )
 
 with DAG(
-    dag_id='snowflake_simple_pipeline',
-    default_args=default_args,
-    description='A simple pipeline to insert dummy data into Snowflake',
-    schedule=None, 
+    dag_id="snowflake_simple_pipeline",
+    start_date=datetime(2026, 9, 25),
+    schedule="@daily",
     catchup=False,
 ) as dag:
 
-    insert_data = SQLExecuteQueryOperator(
-        task_id='insert_dummy_data',
-        conn_id='snowflake_conn',
+    create_table = SQLExecuteQueryOperator(
+        task_id="create_table",
+        conn_id="snowflake_conn",
         sql="""
-            INSERT INTO AIRFLOW_DB.PUBLIC.SALES_DATA (ORDER_ID, PRODUCT_NAME, AMOUNT)
-            VALUES 
-            (101, 'Laptop', 1200.50),
-            (102, 'Mouse', 25.00),
-            (103, 'Monitor', 350.00);
+            CREATE TABLE IF NOT EXISTS AIRFLOW_DB.PUBLIC.SALES_DATA (
+                ORDER_ID NUMBER, PRODUCT_NAME STRING, AMOUNT NUMBER(10,2)
+            );
         """,
     )
 
-    verify_data = SQLExecuteQueryOperator(
-        task_id='verify_data_count',
-        conn_id='snowflake_conn',
-        sql="SELECT COUNT(*) FROM AIRFLOW_DB.PUBLIC.SALES_DATA;",
+    insert_data = PythonOperator(
+        task_id="insert_random_data", python_callable=load_random_rows
     )
 
-    insert_data >> verify_data
+    build_summary = SQLExecuteQueryOperator(
+        task_id="build_summary",
+        conn_id="snowflake_conn",
+        sql="""
+            CREATE OR REPLACE TABLE AIRFLOW_DB.PUBLIC.SALES_SUMMARY AS
+            SELECT PRODUCT_NAME, COUNT(*) AS ORDERS, SUM(AMOUNT) AS TOTAL
+            FROM AIRFLOW_DB.PUBLIC.SALES_DATA
+            GROUP BY PRODUCT_NAME;
+        """,
+    )
+
+    check_data = SQLCheckOperator(
+        task_id="check_no_bad_rows",
+        conn_id="snowflake_conn",
+        sql="""
+            SELECT COUNT(*) > 0 AND MIN(AMOUNT) >= 0
+            FROM AIRFLOW_DB.PUBLIC.SALES_DATA;
+        """,
+    )
+
+    create_table >> insert_data >> build_summary >> check_data
