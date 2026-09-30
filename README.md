@@ -1,21 +1,35 @@
 # Dockerized Apache Airflow to Snowflake Data Pipeline
 
-A lightweight, production-ready development template designed to orchestrate data ingestion workflows from a containerized **Apache Airflow 3.x** instance directly into a **Snowflake Cloud Data Platform** target architecture. 
+A lightweight development template for orchestrating a small data pipeline from a containerized Apache Airflow 3.x instance into Snowflake.
 
-This project bypasses proprietary enterprise CLIs, leveraging standard **Docker Compose** architectures and standard Python SQL provider operators to establish a baseline data lifecycle framework natively inside a Windows environment using PowerShell.
+It uses standard Docker Compose and the official Airflow SQL and Snowflake providers, and it is set up to run on Windows with Docker Desktop and PowerShell.
 
 ## 🚀 Key Features
-* **Full Container Orchestration:** Spins up a complete 8-component Airflow environment (Scheduler, Webserver, Worker, Triggerer, API-Server, DAG Processor, Redis, and Postgres DB metadata layer) via a single command.
-* **Snowflake Integration:** Native connectivity utilizing the `apache-airflow-providers-snowflake` package to interact directly with remote cloud target endpoints.
-* **Idempotent Ingestion Design:** Built-in modular tasks handling mock transaction streams, destination structures, and downstream record verification checks.
-* **Tailored for Windows/PowerShell:** Fully configured filesystem structures, environment variable generation paths, and file-sharing permissions optimized for Docker Desktop for Windows architectures.
 
----
+* **Full container orchestration:** starts the whole Airflow stack (API server, scheduler, DAG processor, Celery worker, triggerer) plus Redis and Postgres with a single `docker compose up`.
+* **Snowflake integration:** connects through the `apache-airflow-providers-snowflake` package, using both SQL operators and the Snowflake hook.
+* **Self-contained pipeline:** creates its own table, loads generated sample data, builds a summary table, and validates the result.
+* **Windows-friendly:** file paths, environment variable setup, and permissions are configured for Docker Desktop on Windows.
 
-## 🛠️ Architecture & Workflow Overview
-The automated workflow (`snowflake_simple_pipeline`) executes on a custom scheduling grid containing sequential dependencies:
+## 🛠️ Workflow Overview
 
-1. **Task 1 (`insert_dummy_data`):** Uses the `SQLExecuteQueryOperator` to initiate a remote secure tunnel into Snowflake and inject operational metadata metrics (Order ID, Product Details, Financial Values).
-2. **Task 2 (`verify_data_count`):** Validates the data persistence layer by computing warehouse row inventories post-ingestion.
+The DAG `snowflake_simple_pipeline` runs daily with sequential dependencies:
 
+1. **`create_table`**: creates `SALES_DATA` if it does not already exist.
+2. **`insert_random_data`**: a Python task that uses `SnowflakeHook` to insert five randomly generated sales rows (order ID, product, amount).
+3. **`build_summary`**: rebuilds `SALES_SUMMARY` with the order count and total amount per product.
+4. **`check_no_bad_rows`**: a data quality check that fails the run if the table is empty or contains a negative amount.
 
+```
+create_table >> insert_random_data >> build_summary >> check_no_bad_rows
+```
+
+## ⚙️ Setup
+
+1. Create the Snowflake warehouse, database, schema, and `SALES_DATA` table.
+2. Copy your settings into a `.env` file (`AIRFLOW_UID`, `FERNET_KEY`). This file is git-ignored.
+3. Start the stack with `docker compose up -d`.
+4. In the Airflow UI, create a `snowflake_conn` connection with your account, warehouse, database, and role.
+5. Unpause and trigger `snowflake_simple_pipeline` at http://localhost:8080.
+
+> This project is meant for learning and local development. Do not commit credentials, and rotate the Fernet key if it is ever exposed.
